@@ -1,6 +1,9 @@
 from typing import Literal, Optional
 import torch
+import os
+import sys
 
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 # -----------------------------------------------------------------------------------------------------------------------------------
 # The main tester: register this with the testing framework for dataset tests
 def test_dataset_asr(dataset, method:Optional[Literal['__init__', '__get_item__', 'collate_fn']]=None):

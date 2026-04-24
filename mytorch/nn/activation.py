@@ -21,8 +21,8 @@ class Softmax:
             raise ValueError("Dimension to apply softmax to is greater than the number of dimensions in Z")
         
         # TODO: Implement forward pass
-        self.A = NotImplementedError
-        raise NotImplementedError
+        self.A = np.exp(Z) / np.sum(np.exp(Z), axis=self.dim, keepdims=True)  # Shape: (*)
+        return self.A
 
     def backward(self, dLdA):
         """
@@ -30,8 +30,8 @@ class Softmax:
         :return: Gradient of loss with respect to activation input
         """
         # TODO: Implement backward pass
-
-        raise NotImplementedError
- 
-
-    
+        
+        prod = self.A * dLdA                          # element-wise
+        sum_prod = np.sum(prod, axis=self.dim, keepdims=True)
+        dLdZ = self.A * (dLdA - sum_prod)
+        return dLdZ

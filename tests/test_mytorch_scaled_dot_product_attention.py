@@ -1,3 +1,8 @@
+import sys
+import os
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+
 import torch
 import numpy as np
 from torch.nn.functional import scaled_dot_product_attention as PytorchScaledDotProductAttention
@@ -110,3 +115,6 @@ def test_scaled_dot_product_attention_backward():
             f"Value gradients don't match for case: {shape}"
 
     print("Test Passed: Scaled Dot Product Attention Backward")
+
+test_scaled_dot_product_attention_forward()
+test_scaled_dot_product_attention_backward()

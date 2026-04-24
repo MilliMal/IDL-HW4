@@ -1,3 +1,7 @@
+import os
+import sys
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 import torch
 import numpy as np
 from mytorch.nn.multi_head_attention import MultiHeadAttention as MytorchMultiHeadAttention
@@ -158,3 +162,7 @@ def test_multi_head_attention_backward():
             f"Value gradients don't match for case: batch_size={batch_size}, seq_len={seq_len}, embed_dim={embed_dim}, num_heads={num_heads}"
 
     print("Test Passed: Multi Head Attention Backward")    
+
+
+test_multi_head_attention_forward()
+test_multi_head_attention_backward()

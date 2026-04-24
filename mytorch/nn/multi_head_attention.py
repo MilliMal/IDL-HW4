@@ -20,14 +20,14 @@ class MultiHeadAttention:
         self.num_heads = num_heads
         
         # Initialize your scaled dot product attention layer
-        self.attention = NotImplementedError
+        self.attention = ScaledDotProductAttention()
         
         # Initialize your linear layer
         #  embed_dim -> embed_dim
-        self.q_proj   = NotImplementedError
-        self.k_proj   = NotImplementedError
-        self.v_proj   = NotImplementedError
-        self.out_proj = NotImplementedError
+        self.q_proj   = Linear(embed_dim, embed_dim)
+        self.k_proj   = Linear(embed_dim, embed_dim)
+        self.v_proj   = Linear(embed_dim, embed_dim)
+        self.out_proj = Linear(embed_dim, embed_dim)
 
     def init_weights(self, Wq, bq, Wk, bk, Wv, bv, Wo, bo):
         """
@@ -57,28 +57,28 @@ class MultiHeadAttention:
         self.E = query.shape[2]
         
         # Project inputs
-        q = NotImplementedError
-        k = NotImplementedError
-        v = NotImplementedError
+        q = self.q_proj.forward(query)
+        k = self.k_proj.forward(key)
+        v = self.v_proj.forward(value)
 
         # Reshape for multiple heads
-        q = NotImplementedError
-        k = NotImplementedError
-        v = NotImplementedError
+        q = self._split_heads(q)  # (N, num_heads, L, d_k)
+        k = self._split_heads(k)  # (N, num_heads, S, d_k)
+        v = self._split_heads(v)  # (N, num_heads, S, d_v)
 
         # Combine padding and causal masks
-        mask = NotImplementedError
+        mask = self._merge_masks(key_padding_mask, attn_mask)  # (N, num_heads, L, S)
 
         # Apply attention
-        attn_outputs = NotImplementedError
+        attn_outputs = self.attention.forward(q, k, v, mask)  # (N, num_heads, L, d_v)
 
         # Merge heads
-        attn_output = NotImplementedError
+        attn_output = self._concat_heads(attn_outputs)  # (N, L, E)
 
         # Final projection
-        output = NotImplementedError
+        output = self.out_proj.forward(attn_output)  # (N, L, E)
 
-        raise NotImplementedError
+        return output
 
     def backward(self, d_output):
         """
@@ -86,48 +86,50 @@ class MultiHeadAttention:
         """
 
         # Backpropagate through output projection
-        d_attn_output = NotImplementedError
+        d_attn_output = self.out_proj.backward(d_output)  # (N, L, E)
 
         # Undo head splitting
-        d_attn_outputs = NotImplementedError
+        d_attn_outputs = self._split_heads(d_attn_output)  # (N, num_heads, L, d_v)
 
         # Backpropagate through attention
-        d_q, d_k, d_v = NotImplementedError
+        d_q, d_k, d_v = self.attention.backward(d_attn_outputs)  # (N, num_heads, L, d_k), (N, num_heads, S, d_k), (N, num_heads, S, d_v)
 
         # Merge head gradients
-        d_q = NotImplementedError
-        d_k = NotImplementedError
-        d_v = NotImplementedError
+        d_q = self._concat_heads(d_q)  # (N, L, E)
+        d_k = self._concat_heads(d_k)  # (N, S, E)
+        d_v = self._concat_heads(d_v)  # (N, S, E)
 
         # Backpropagate through input projections
-        d_q = NotImplementedError
-        d_k = NotImplementedError
-        d_v = NotImplementedError
+        d_q = self.q_proj.backward(d_q)
+        d_k = self.k_proj.backward(d_k)
+        d_v = self.v_proj.backward(d_v)
 
-        raise NotImplementedError
+        return d_q, d_k, d_v
 
     def _merge_masks(self, key_padding_mask, attn_mask):
         """
         Merge two mask types into a single mask.
         """
         # Expand masks for broadcasting
-        key_mask = NotImplementedError
-        attention_mask = NotImplementedError
-        
+        key_mask = np.expand_dims(np.expand_dims(key_padding_mask, 1), 1)
+        attention_mask = np.expand_dims(np.expand_dims(attn_mask, 0), 0)
+
         # Combine masks
-        combined_mask = NotImplementedError
+        combined_mask = np.logical_or(key_mask, attention_mask)  # (N, L, S)
         
-        raise NotImplementedError
+        return  np.repeat(combined_mask, self.num_heads, axis=1)
 
     def _split_heads(self, x):
         """
         Reshape tensor for multi-head attention.
         """
         # Reshape and transpose for heads
-        x = NotImplementedError
-        x = NotImplementedError
+        h = self.num_heads
+        N, L, E = x.shape
+        x = x.reshape(N, L, h, E // h)  # (N, L, num_heads, d_k)
+        x = x.transpose(0, 2, 1, 3)  #
         
-        raise NotImplementedError
+        return x  # (N, num_heads, L, d_k)
 
     def _concat_heads(self, x):
         """
@@ -137,7 +139,9 @@ class MultiHeadAttention:
         :return: (N, L, embed_dim)
         """
         # Transpose and reshape
-        x = NotImplementedError
-        x = NotImplementedError
+        N, H, L, d_k = x.shape
+        embed_dim = H * d_k
+        x = np.transpose(x, (0, 2, 1, 3))  
+        x = x.reshape(N, L, embed_dim)
         
-        raise NotImplementedError
+        return x  # (N, L, embed_dim)

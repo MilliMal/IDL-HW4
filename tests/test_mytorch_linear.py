@@ -1,3 +1,7 @@
+import sys
+import os
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 import torch
 import numpy as np
 from torch.nn import Linear as PytorchLinear
@@ -93,3 +97,5 @@ def test_linear_backward():
             f"Bias gradients don't match for shape: batch_size={batch_size}, seq_len={seq_len}, in_features={in_features}, out_features={out_features}"
 
     print("Test Passed: Linear Backward")
+
+test_linear()

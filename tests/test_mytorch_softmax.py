@@ -1,3 +1,7 @@
+import sys
+import os
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 import torch
 import numpy as np
 from torch.nn import Softmax as PytorchSoftmax
@@ -90,3 +94,5 @@ def test_softmax_backward():
     print("Test Passed: Softmax Backward")
 
 
+test_softmax_forward()
+test_softmax_backward()
