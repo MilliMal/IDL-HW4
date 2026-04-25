@@ -40,10 +40,10 @@ class SelfAttentionLayer(nn.Module):
             dropout (float): The dropout rate.
         '''
         super().__init__()
-        self.mha = NotImplementedError
-        self.norm = NotImplementedError
-        self.dropout = NotImplementedError
-        raise NotImplementedError
+        self.mha = nn.MultiheadAttention(embed_dim=d_model, num_heads=num_heads, dropout=dropout, batch_first=True)
+        self.norm = nn.LayerNorm(d_model)
+        self.dropout = nn.Dropout(dropout)
+
 
 
     def forward(self, x: torch.Tensor, key_padding_mask: Optional[torch.Tensor] = None, attn_mask: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -58,8 +58,10 @@ class SelfAttentionLayer(nn.Module):
             x (torch.Tensor): Output tensor, shape (batch_size, seq_len, d_model)
             mha_attn_weights (torch.Tensor): Attention weights, shape (batch_size, seq_len, seq_len)   
         '''
-        x, mha_attn_weights = NotImplementedError, NotImplementedError
-        raise NotImplementedError
+        residual = x 
+        x, mha_attn_weights = self.mha(query=self.norm(x), key=self.norm(x), value=self.norm(x), key_padding_mask=key_padding_mask, attn_mask=attn_mask)
+        x = residual + self.dropout(x)
+        return x, mha_attn_weights
     
 ## -------------------------------------------------------------------------------------------------  
 class CrossAttentionLayer(nn.Module):
@@ -138,10 +140,14 @@ class FeedForwardLayer(nn.Module):
             dropout (float): The dropout rate.
         '''
         super().__init__()
-        self.ffn = NotImplementedError
-        self.norm = NotImplementedError
-        self.dropout = NotImplementedError
-        raise NotImplementedError
+        self.ffn = nn.Sequential(
+            nn.Linear(d_model, d_ff),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(d_ff, d_model)
+        )
+        self.norm = nn.LayerNorm(d_model)
+        self.dropout = nn.Dropout(dropout)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         '''
@@ -152,6 +158,8 @@ class FeedForwardLayer(nn.Module):
         Returns:
             x (torch.Tensor): Output tensor, shape (batch_size, seq_len, d_model)
         '''
-        x = NotImplementedError
-        raise NotImplementedError
+        residual = x
+        x = self.norm(x)
+        x = residual + self.dropout(self.ffn(x))
+        return x
     

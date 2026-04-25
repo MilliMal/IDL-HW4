@@ -1,5 +1,9 @@
 from typing import Callable
 import torch
+import os
+import sys
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 
 def test_mask_causal(mask_gen_fn: Callable[[torch.Tensor], torch.Tensor]):
     '''

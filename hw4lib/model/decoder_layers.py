@@ -50,10 +50,14 @@ class SelfAttentionDecoderLayer(nn.Module):
             dropout (float): The dropout rate.
         ''' 
         super().__init__()
+
         # TODO: Implement __init__
        
-        # TODO: Initialize the sublayers      
-        raise NotImplementedError # Remove once implemented
+        # TODO: Initialize the sublayers   
+        self.self_attn = SelfAttentionLayer(d_model=d_model, num_heads=num_heads, dropout=dropout)
+        self.ffn       = FeedForwardLayer(d_model=d_model, d_ff=d_ff, dropout=dropout)
+           
+        
 
     def forward(self, x: torch.Tensor, key_padding_mask: Optional[torch.Tensor] = None, attn_mask: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, torch.Tensor]:
         '''
@@ -69,9 +73,18 @@ class SelfAttentionDecoderLayer(nn.Module):
         '''
         # TODO: Implement forward: Follow the figure in the writeup
 
+        mha_output, mha_attn_weights = self.self_attn(x, key_padding_mask=key_padding_mask, attn_mask=attn_mask)
+        x = self.ffn(mha_output)
+        
+
+
+
+
+
+
 
         # TODO: Return the output tensor and attention weights
-        raise NotImplementedError # Remove once implemented
+        return x, mha_attn_weights
 
 ## -------------------------------------------------------------------------------------------------    
 class CrossAttentionDecoderLayer(nn.Module):
