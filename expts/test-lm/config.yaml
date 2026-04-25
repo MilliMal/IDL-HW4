@@ -35,7 +35,7 @@ training:
   use_wandb                   : False   # Toggle wandb logging
   wandb_run_id                : "none" # "none" or "run_id"
   resume                      : False  # Resume an existing run (run_id != 'none')
-  epochs                      : 2
+  epochs                      : 20
   gradient_accumulation_steps : 1
   wandb_project               : "Set-Project-Name-Here" # wandb project to log to
 

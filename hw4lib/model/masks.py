@@ -24,6 +24,11 @@ def PadMask(padded_input, input_lengths):
         Boolean mask tensor with shape (N, T).
     """
     # TODO: Implement PadMask
+    # Handle None input_lengths (during inference/generation)
+    if input_lengths is None:
+        # No padding mask needed during inference - return all False
+        return torch.zeros(padded_input.size(0), padded_input.size(1), dtype=torch.bool, device=padded_input.device)
+    
     return torch.arange(padded_input.size(1), device=padded_input.device).expand(len(input_lengths), -1) >= input_lengths.unsqueeze(1)  
 
 ''' 
