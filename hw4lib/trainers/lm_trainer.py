@@ -53,7 +53,10 @@ class LMTrainer(BaseTrainer):
         # TODO: Initialize the criterion
         # How would you set the ignore_index? 
         # Use value in config to set the label_smoothing argument
-        self.criterion = nn.CrossEntropyLoss(ignore_index=self.tokenizer.pad_token_id, label_smoothing=self.config['training'].get('label_smoothing', 0.0))
+        self.criterion = nn.CrossEntropyLoss(
+            ignore_index=self.tokenizer.pad_id,
+            label_smoothing=self.config.get("label_smoothing", 0.0)
+        )
 
     def _train_epoch(self, dataloader) -> Tuple[Dict[str, float], Dict[str, torch.Tensor]]:
         """
@@ -66,7 +69,8 @@ class LMTrainer(BaseTrainer):
         """
 
         # TODO: In-fill the _train_epoch method
-
+        
+        # Initialize training variables
         self.model.train()
         batch_bar = tqdm(total=len(dataloader), dynamic_ncols=True, leave=False, position=0, desc=f"[Training LM]")
         running_ce_loss = 0.0
@@ -79,18 +83,23 @@ class LMTrainer(BaseTrainer):
             # TODO: Unpack batch from the dataloader
             # TODO: Move the batch elements to self.device
             targets_shifted, targets_golden, lengths = batch
-        
+            targets_shifted = targets_shifted.to(self.device)
+            targets_golden = targets_golden.to(self.device)
+            lengths = lengths.to(self.device)
 
             with torch.autocast(device_type=self.device, dtype=torch.float16):
 
                 # TODO: Get raw logits and attention weights from model
-                raw_preds, attn_weights = self.model(targets_shifted, lengths)  # Make sure to pass the correct
+                raw_preds, attn_weights = self.model(targets_shifted, lengths)
 
                 # TODO: Calculate raw loss first
                 # What is the shape of raw_preds and targets_golden? 
                 # Would you need to change the shape of the inputs to the criterion?
                 # Hint: See the documentation for CrossEntropyLoss
-                raw_loss = self.criterion(raw_preds.view(-1, self.model.num_classes), targets_golden.view(-1))
+                raw_loss = self.criterion(
+                    raw_preds.view(-1, raw_preds.size(-1)),
+                    targets_golden.view(-1)
+                )
                 
             # Calculate metrics with raw loss (DO NOT MODIFY THIS)
             batch_tokens = lengths.sum().item()
@@ -101,7 +110,6 @@ class LMTrainer(BaseTrainer):
             loss = raw_loss / self.config['training']['gradient_accumulation_steps']
             
             # TODO: Backpropagate the loss
-            self.scaler = torch.amp.GradScaler()  # You can initialize this in __init__ if you want
             self.scaler.scale(loss).backward()
         
             # Only update weights after accumulating enough gradients
@@ -172,16 +180,22 @@ class LMTrainer(BaseTrainer):
             # TODO: Unpack batch
             # TODO: Move the batch elements to self.device
             targets_shifted, targets_golden, lengths = batch
+            targets_shifted = targets_shifted.to(self.device)
+            targets_golden = targets_golden.to(self.device)
+            lengths = lengths.to(self.device)
 
             # Forward pass
             with torch.inference_mode():
                 # TODO: Get raw predictions and attention weights from model
-                raw_preds, attn_weights = self.model(targets_shifted, lengths)  # Make sure to pass the correct inputs
+                raw_preds, attn_weights = self.model(targets_shifted, lengths)
 
                 # TODO: Calculate loss
                 # What is the shape of raw_preds and targets_golden? 
                 # Would you need to change the shape of the inputs to the criterion?
-                loss = self.criterion(raw_preds.view(-1, self.model.num_classes), targets_golden.view(-1))
+                loss = self.criterion(
+                    raw_preds.view(-1, raw_preds.size(-1)),
+                    targets_golden.view(-1)
+                )
 
             # Calculate metrics
             batch_tokens = lengths.sum().item()
@@ -317,29 +331,6 @@ class LMTrainer(BaseTrainer):
         return test_metrics, generation_results
 
     def generate(self, dataloader, generation_config: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
-        """
-        Evaluate the model by generating sequences from prompts.
-        
-        Args:
-            dataloader: DataLoader containing the evaluation data
-            generation_config: Optional dictionary containing generation parameters:
-                - num_samples: int, number of samples to generate
-                - prompt_length: int, length of prompts
-                - seed: int, random seed
-                - max_length: int, maximum sequence length
-                - temperature: float, sampling temperature
-                - beam_width: int, beam search width
-                - repeat_penalty: float, penalty for repeated tokens
-                - top_k: int, top-k filtering value
-                - top_p: float, nucleus sampling threshold
-        Returns:
-            Dict containing generation results with prompts, originals, and generated sequences
-        """
-
-        # TODO: In-fill the generate method
-        # You just need to implement the greedy search generation
-        # See the TODO below
-
         if generation_config is None:
             # Greedy search (default)
             generation_config = {
@@ -375,31 +366,27 @@ class LMTrainer(BaseTrainer):
         with torch.inference_mode():
             if generation_config.get('top_k', 0) > 0 or generation_config.get('top_p', 0) > 0:
                 print("Generating with sampling...")
-                seqs, scores = NotImplementedError, NotImplementedError
-                raise NotImplementedError # Remove if you implemented the sampling method
+                # Not implemented yet – raise an error if you haven't done it
+                raise NotImplementedError("Sampling generation not implemented yet.")
             elif generation_config.get('beam_width', 1) > 1:
                 print("Generating with beam search...")
-                seqs, scores = NotImplementedError, NotImplementedError
-                raise NotImplementedError # Remove if you implemented the beam search method
-                # Take best beam and score
-                seqs = seqs[:, 0]
-                scores = scores[:, 0]
+                # Not implemented yet – raise an error if you haven't done it
+                raise NotImplementedError("Beam search generation not implemented yet.")
             else:
-                # TODO: Use the prompts and the generate_greedy method you implemented in the SequenceGenerator class to generate sequences
                 print("Generating with greedy search...")
-                seqs, scores = generator.generate_greedy(prompts)  # Make sure to pass the correct
-        # Post-process sequences (trim upto EOS token)
+                # Call your greedy decoding implementation
+                seqs, scores = generator.generate_greedy(
+                    prompts,
+                    temperature=generation_config.get('temperature', 1.0),
+                    repeat_penalty=generation_config.get('repeat_penalty', 1.0)
+                )
+
+        # Post-process sequences (trim up to EOS token)
         processed_seqs = generator.post_process_sequence(seqs, self.tokenizer)
 
         # Compile results
-        # results is a dictionary with the following keys:
-        # - prompt: the decoded prompt
-        # - generated: the decoded generated sequence after the prompt
-        # - original: the decoded original sequence after the prompt
-        # - score: the score of the generated sequence
-        # NOTE: You might find the H4Tokenizer class useful here
         results = []
-        for _, (prompt, seq, score, original) in enumerate(zip(prompts, processed_seqs, scores, originals)):
+        for prompt, seq, score, original in zip(prompts, processed_seqs, scores, originals):
             results.append({
                 'prompt': self.tokenizer.decode(prompt.tolist()),
                 'original': self.tokenizer.decode(original[len(prompt):].tolist()),
