@@ -53,10 +53,14 @@ class LMTrainer(BaseTrainer):
         # TODO: Initialize the criterion
         # How would you set the ignore_index? 
         # Use value in config to set the label_smoothing argument
+<<<<<<< HEAD
         self.criterion = nn.CrossEntropyLoss(
             ignore_index=self.tokenizer.pad_id,
             label_smoothing=self.config.get("label_smoothing", 0.0)
         )
+=======
+        self.criterion = nn.CrossEntropyLoss(ignore_index=self.tokenizer.pad_id, label_smoothing=self.config['training'].get('label_smoothing', 0.0))
+>>>>>>> 831413eaeadf5f05cba7d14ca63be230393dcc9b
 
     def _train_epoch(self, dataloader) -> Tuple[Dict[str, float], Dict[str, torch.Tensor]]:
         """

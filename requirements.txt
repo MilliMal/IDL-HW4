@@ -9,6 +9,7 @@ comm
 contourpy==1.3.1
 cycler==0.12.1
 debugpy 
+transformers
 decorator 
 docker-pycreds==0.4.0
 exceptiongroup 
