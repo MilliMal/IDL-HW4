@@ -12,7 +12,7 @@ tokenization:
 
 ###### Dataset -----------------------------------------------------------------
 data:                    # Currently setup for Colab assuming out setup
-  root                 : "hw4_data_subset/hw4p1_data/"  # TODO: Set the root path of your data
+  root                 : "hw4_data_subset/hw4p1_data"  # TODO: Set the root path of your data
   train_partition      : "train"  # train
   val_partition        : "val"    # val
   test_partition       : "test"   # test
