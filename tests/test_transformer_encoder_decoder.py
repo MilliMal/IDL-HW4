@@ -1,5 +1,11 @@
+import os
+import sys
+
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 import torch
 from hw4lib.model import PadMask
+
 def test_encoder_decoder_transformer(transformer):
     '''
     Test the EncoderDecoderTransformer implementation.

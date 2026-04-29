@@ -43,13 +43,15 @@ class SelfAttentionEncoderLayer(nn.Module):
             dropout (float): The dropout rate.
         '''
         super().__init__()
-        # TODO: Implement __init__
-
-        # TODO: Initialize the sublayers      
-        raise NotImplementedError # Remove once implemented
+        self.self_attn = SelfAttentionLayer(d_model=d_model, num_heads=num_heads, dropout=dropout)
+        self.ffn  = FeedForwardLayer(d_model=d_model, d_ff=d_ff,
+                                             dropout=dropout)
+        
+        
 
     def forward(self, x: torch.Tensor, key_padding_mask: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, torch.Tensor]:
         '''
+        
         Forward pass for the EncoderLayer.
         Args:
             x (torch.Tensor): The input tensor. shape: (batch_size, seq_len, d_model)   
@@ -63,6 +65,7 @@ class SelfAttentionEncoderLayer(nn.Module):
 
         # What will be different from decoder self-attention layer?
         
-        # TODO: Return the output tensor and attention weights
-        raise NotImplementedError # Remove once implemented
+        mha, mha_attn_weights =  self.self_attn(x, key_padding_mask=key_padding_mask) # No causal mask needed for encoder
+        x = self.ffn(mha)
+        return x, mha_attn_weights
 

@@ -1,5 +1,7 @@
 import torch
-
+import os
+import sys
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 def test_decoderlayer_crossattention(decoder_layer):
     '''
     Test the decoder layer with both self-attention and cross-attention mechanisms integrated.   

@@ -1,6 +1,10 @@
 from typing import Callable, Dict, Any
 import traceback
 
+
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 '''
 Example usage:
 if __name__ == "__main__":
@@ -178,5 +182,6 @@ class TestingFramework:
         
         print(f"\033[93m{'Category:':<12} {category:<30}")
         print(f"{'Results:':<12} {passed}/{total} tests passed ({passed/total*100:.1f}%)\033[0m")
+
 
 

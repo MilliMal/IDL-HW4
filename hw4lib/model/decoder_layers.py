@@ -102,10 +102,14 @@ class CrossAttentionDecoderLayer(nn.Module):
             dropout (float): The dropout rate.
         '''
         super().__init__()
-        # TODO: Implement __init__
+        self.cross_attn = CrossAttentionLayer(d_model=d_model, num_heads=num_heads, dropout=dropout)
+        self.self_attn  = SelfAttentionLayer(d_model=d_model, num_heads=num_heads, dropout=dropout)
+        self.ffn       = FeedForwardLayer(d_model=d_model,
+                                                d_ff=d_ff, dropout=dropout)
+        
+
 
         # TODO: Initialize the sublayers  
-        raise NotImplementedError # Remove once implemented
 
     def forward(self, x: torch.Tensor, enc_output: torch.Tensor, dec_key_padding_mask: Optional[torch.Tensor] = None, enc_key_padding_mask: Optional[torch.Tensor] = None, attn_mask: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         '''
@@ -123,7 +127,14 @@ class CrossAttentionDecoderLayer(nn.Module):
         '''
         # TODO: Implement forward: Follow the figure in the writeup
 
+        self_attn_output, self_attn_weights = self.self_attn(x, key_padding_mask=dec_key_padding_mask, attn_mask=attn_mask)
+        cross_attn_output, cross_attn_weights = self.cross_attn(self_attn_output, enc_output, key_padding_mask=enc_key_padding_mask)
+        x = self.ffn(cross_attn_output) 
+        
 
-        # TODO: Return the output tensor and attention weights    
-        raise NotImplementedError # Remove once implemented
+        return x, self_attn_weights, cross_attn_weights
+
+
+
+       
 ## -------------------------------------------------------------------------------------------------    
