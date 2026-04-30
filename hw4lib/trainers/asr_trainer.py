@@ -215,7 +215,7 @@ class ASRTrainer(BaseTrainer):
         # Greedy validation over full validation set
         recognition_config = {
             'num_batches': None,
-            'beam_width': 1,
+            'beam_width': 3,
             'temperature': 1.0,
             'repeat_penalty': 1.0,
             'lm_weight': 0.0,
@@ -224,7 +224,7 @@ class ASRTrainer(BaseTrainer):
         val_results = self.recognize(
             dataloader,
             recognition_config=recognition_config,
-            config_name='greedy',
+            config_name='beam',
             max_length=getattr(self, 'text_max_len', None)
         )
 
