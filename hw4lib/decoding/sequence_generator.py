@@ -229,24 +229,29 @@ class SequenceGenerator:
         
         # Generate tokens step by step
         for step in range(self.max_length - seq_len):
-            # Flatten batch and beam dimensions for scoring
-            # Shape: (batch_size * beam_width, seq_len)
-            flat_sequences = sequences.reshape(batch_size * beam_width, -1)
-            
-            # Score all sequences
-            # Shape: (batch_size * beam_width, vocab_size)
-            logits = self.score_fn(flat_sequences)
-            
-            # Apply temperature and filtering
+            # Score sequences per original batch so external score functions
+            # that expect batch_size==original_batch (e.g., tests' DeterministicScoreFn)
+            # can index their per-batch structures correctly.
+            # Build logits for each beam slice: list of (batch_size, 1, vocab_size)
+            logits_list = []
+            for b in range(beam_width):
+                # Select the b-th beam for all batch items: (batch_size, seq_len)
+                x_b = sequences[:, b, :]
+                # Score this slice: expected shape (batch_size, vocab_size)
+                logits_b = self.score_fn(x_b)
+                # Ensure logits_b has vocab on last dim
+                if logits_b.dim() == 1:
+                    logits_b = logits_b.unsqueeze(0)
+                logits_list.append(logits_b.unsqueeze(1))
+
+            # Concatenate to (batch_size, beam_width, vocab_size)
+            logits = torch.cat(logits_list, dim=1)
+
+            # Apply temperature and filtering (works on last dim)
             filtered_logits = self._filter_logits(logits, temperature, top_k=0, top_p=1.0)
-            
-            # Apply repeat penalty to flat sequences
-            # Shape: (batch_size * beam_width, vocab_size)
-            filtered_logits = self._apply_repeat_penalty(filtered_logits, flat_sequences, repeat_penalty)
-            
-            # Reshape back to batch, beam, vocab
-            # Shape: (batch_size, beam_width, vocab_size)
-            filtered_logits = filtered_logits.reshape(batch_size, beam_width, -1)
+
+            # Apply repeat penalty to sequences (batch, beam, seq_len)
+            filtered_logits = self._apply_repeat_penalty(filtered_logits, sequences, repeat_penalty)
             
             # For finished beams, only allow EOS token
             # Shape: (batch_size, beam_width, 1)
