@@ -114,15 +114,16 @@ class ASRTrainer(BaseTrainer):
                 # TODO: get raw predictions and attention weights and ctc inputs from model
                 seq_out, curr_att, ctc_inputs = self.model(feats, targets_shifted, feat_lengths, transcript_lengths)
                 
-                # Update running_att with the latest attention weights
-                running_att = curr_att
+                # FIX: detach attention weights to break computation graph reference
+                # Without this, PyTorch holds the entire computation graph for every
+                # batch in memory, causing OOM on large datasets
+                running_att = {k: v.detach() for k, v in curr_att.items()}
                 
                 # TODO: Calculate CE loss
                 ce_loss = self.ce_criterion(
                     seq_out.view(-1, seq_out.size(-1)),
                     targets_golden.view(-1)
                 )
-                
                 
                 # TODO: Calculate CTC loss if needed
                 if self.ctc_weight > 0:
@@ -174,10 +175,11 @@ class ASRTrainer(BaseTrainer):
             )
             batch_bar.update()
 
-            # Clean up
+            # FIX: Clean up all tensors including curr_att which was previously missing,
+            # and remove empty_cache() from the per-batch loop — it forces costly CUDA
+            # syncs on every batch. We call it once per epoch in train() instead.
             del feats, targets_shifted, targets_golden, feat_lengths, transcript_lengths
             del seq_out, curr_att, ctc_inputs, ce_loss, ctc_loss, loss
-            torch.cuda.empty_cache()
 
         # Handle remaining gradients
         if (len(dataloader) % self.config['training']['gradient_accumulation_steps']) != 0:
@@ -215,7 +217,7 @@ class ASRTrainer(BaseTrainer):
         # Greedy validation over full validation set
         recognition_config = {
             'num_batches': None,
-            'beam_width': 3,
+            'beam_width': 1,
             'temperature': 1.0,
             'repeat_penalty': 1.0,
             'lm_weight': 0.0,
@@ -224,7 +226,7 @@ class ASRTrainer(BaseTrainer):
         val_results = self.recognize(
             dataloader,
             recognition_config=recognition_config,
-            config_name='beam',
+            config_name='greedy',
             max_length=getattr(self, 'text_max_len', None)
         )
 
@@ -266,9 +268,17 @@ class ASRTrainer(BaseTrainer):
 
             # TODO: Train for one epoch
             train_metrics, train_attn = self._train_epoch(train_dataloader)
+
+            # FIX: Single empty_cache() call per epoch, between training and validation.
+            # This gives CUDA a clean slate before the validation forward passes
+            # without the per-batch sync overhead that was killing throughput.
+            torch.cuda.empty_cache()
             
             # TODO: Validate
             val_metrics, val_results = self._validate_epoch(val_dataloader)
+
+            # FIX: Free validation memory before next epoch
+            torch.cuda.empty_cache()
 
             # Step ReduceLROnPlateau scheduler with validation loss
             if isinstance(self.scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
@@ -892,6 +902,3 @@ class ProgressiveTrainer(ASRTrainer):
         )
         
         return subset_loader
-        
-        
-        
