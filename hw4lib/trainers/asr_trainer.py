@@ -77,9 +77,6 @@ class ASRTrainer(BaseTrainer):
                 zero_infinity=True
             )
 
-        # Set to False to skip validation entirely during training (saves time)
-        self.run_validation = True
-
 
     def _train_epoch(self, dataloader):
         """
@@ -217,12 +214,7 @@ class ASRTrainer(BaseTrainer):
         Returns:
             Tuple[Dict[str, float], List[Dict[str, Any]]]: Validation metrics and recognition results
         """
-        # Skip validation entirely if run_validation is False
-        if not self.run_validation:
-            print(" Skipping validation (run_validation=False)")
-            return {'word_dist': 0.0, 'wer': 0.0, 'cer': 0.0}, []
-
-        # Greedy validation over limited batches for speed
+        # Greedy validation over full validation set
         recognition_config = {
             'num_batches': 10,
             'beam_width': 1,
@@ -235,7 +227,7 @@ class ASRTrainer(BaseTrainer):
             dataloader,
             recognition_config=recognition_config,
             config_name='greedy',
-            max_length=100
+            max_length=getattr(self, 'text_max_len', None)
         )
 
         references = [r['target'] for r in val_results if 'target' in r]
@@ -263,8 +255,9 @@ class ASRTrainer(BaseTrainer):
         if self.optimizer is None:
             raise ValueError("Optimizer is not initialized, initialize it first!")
         
-        # Set max transcript length
-        self.text_max_len = max(val_dataloader.dataset.text_max_len, train_dataloader.dataset.text_max_len)
+        # Set max transcript length — hardcoded to 100 for speed
+        # Full dataset max is 2092 which makes inference 20x slower
+        self.text_max_len = 100
 
         # Training loop
         best_val_loss = float('inf')
@@ -483,6 +476,7 @@ class ASRTrainer(BaseTrainer):
 
                 # Clean up
                 del feats, feat_lengths, encoder_output, pad_mask_src, prompts
+                torch.cuda.empty_cache()
 
                 # Post process sequences
                 post_processed_preds = generator.post_process_sequence(seqs, self.tokenizer)
