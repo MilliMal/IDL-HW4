@@ -77,6 +77,9 @@ class ASRTrainer(BaseTrainer):
                 zero_infinity=True
             )
 
+        # Set to False to skip validation entirely during training (saves time)
+        self.run_validation = True
+
 
     def _train_epoch(self, dataloader):
         """
@@ -214,7 +217,12 @@ class ASRTrainer(BaseTrainer):
         Returns:
             Tuple[Dict[str, float], List[Dict[str, Any]]]: Validation metrics and recognition results
         """
-        # Greedy validation over full validation set
+        # Skip validation entirely if run_validation is False
+        if not self.run_validation:
+            print(" Skipping validation (run_validation=False)")
+            return {'word_dist': 0.0, 'wer': 0.0, 'cer': 0.0}, []
+
+        # Greedy validation over limited batches for speed
         recognition_config = {
             'num_batches': 10,
             'beam_width': 1,
@@ -475,7 +483,6 @@ class ASRTrainer(BaseTrainer):
 
                 # Clean up
                 del feats, feat_lengths, encoder_output, pad_mask_src, prompts
-                torch.cuda.empty_cache()
 
                 # Post process sequences
                 post_processed_preds = generator.post_process_sequence(seqs, self.tokenizer)
