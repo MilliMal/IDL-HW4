@@ -219,7 +219,7 @@ class ASRTrainer(BaseTrainer):
         """
         # Skip validation entirely if run_validation is False
         if not self.run_validation:
-            print("⚡ Skipping validation (run_validation=False)")
+            print(" Skipping validation (run_validation=False)")
             return {'word_dist': 0.0, 'wer': 0.0, 'cer': 0.0}, []
 
         # Greedy validation over limited batches for speed
