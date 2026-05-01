@@ -168,12 +168,19 @@ class SequenceGenerator:
         scores = torch.zeros(x.size(0), device=x.device)
         finished_flags = torch.zeros(x.size(0), dtype=torch.bool, device=x.device)
         for _ in range(self.max_length - x.size(1)):
+            # Early exit — if all sequences have hit EOS, stop immediately
+            if finished_flags.all():
+                break
+
             next_scores = self.score_fn(x) # (batch_size, vocab_size)
             filtered_logits = self._filter_logits(next_scores, temperature, top_k=0, top_p=1.0)
             filtered_logits = self._apply_repeat_penalty(filtered_logits, x, repeat_penalty)
             next_tokens = torch.argmax(filtered_logits, dim=-1) # (batch_size,)
             token_scores = torch.max(filtered_logits, dim=-1).values # (batch_size,)
             
+            # For finished sequences, force EOS token so sequence doesn't grow
+            next_tokens = torch.where(finished_flags, torch.tensor(self.tokenizer.eos_id, device=x.device), next_tokens)
+
             scores = torch.where(finished_flags, scores, scores + token_scores)
             x = torch.cat([x, next_tokens.unsqueeze(1)], dim=1) # (batch_size, seq_len + 1)
 
