@@ -216,7 +216,7 @@ class ASRTrainer(BaseTrainer):
         """
         # Greedy validation over full validation set
         recognition_config = {
-            'num_batches': None,
+            'num_batches': 10,
             'beam_width': 1,
             'temperature': 1.0,
             'repeat_penalty': 1.0,
