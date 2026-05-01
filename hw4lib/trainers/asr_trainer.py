@@ -235,7 +235,7 @@ class ASRTrainer(BaseTrainer):
             dataloader,
             recognition_config=recognition_config,
             config_name='greedy',
-            max_length=getattr(self, 'text_max_len', None)
+            max_length=100
         )
 
         references = [r['target'] for r in val_results if 'target' in r]
