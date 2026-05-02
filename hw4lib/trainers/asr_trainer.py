@@ -76,9 +76,7 @@ class ASRTrainer(BaseTrainer):
                 blank=self.tokenizer.pad_id,
                 zero_infinity=True
             )
-
-        # Set to False to skip validation entirely during training (saves time)
-        self.run_validation = True
+        
 
 
     def _train_epoch(self, dataloader):
@@ -103,7 +101,7 @@ class ASRTrainer(BaseTrainer):
         self.optimizer.zero_grad()
 
         for i, batch in enumerate(dataloader):
-            # TODO: Unpack batch and move to device
+            # Unpack batch and move to device
             feats, targets_shifted, targets_golden, feat_lengths, transcript_lengths = batch
             feats = feats.to(self.device)
             targets_shifted = targets_shifted.to(self.device)
@@ -111,25 +109,28 @@ class ASRTrainer(BaseTrainer):
             feat_lengths = feat_lengths.to(self.device)
             transcript_lengths = transcript_lengths.to(self.device)
 
-            autocast_dtype = torch.float16 if self.device == 'cuda' else torch.bfloat16
-
-            with torch.autocast(device_type=self.device, dtype=autocast_dtype):
-                # TODO: get raw predictions and attention weights and ctc inputs from model
-                seq_out, curr_att, ctc_inputs = self.model(feats, targets_shifted, feat_lengths, transcript_lengths)
-                
-                # FIX: detach attention weights to break computation graph reference
-                # Without this, PyTorch holds the entire computation graph for every
-                # batch in memory, causing OOM on large datasets
-                running_att = {k: v.detach() for k, v in curr_att.items()}
-                
-                # TODO: Calculate CE loss
-                ce_loss = self.ce_criterion(
-                    seq_out.view(-1, seq_out.size(-1)),
-                    targets_golden.view(-1)
+            with torch.autocast(device_type=self.device, dtype=torch.float16):
+                # Get raw predictions and attention weights and ctc inputs from model
+                seq_out, curr_att, ctc_inputs = self.model(
+                    feats, 
+                    targets_shifted, 
+                    source_lengths=feat_lengths,
+                    target_lengths=transcript_lengths
                 )
                 
-                # TODO: Calculate CTC loss if needed
+                # Update running_att with the latest attention weights
+                running_att = curr_att
+                
+                # Calculate CE loss
+                # Reshape for loss calculation: (batch_size, tgt_len, num_classes) -> (batch_size * tgt_len, num_classes)
+                ce_loss = self.ce_criterion(
+                    seq_out.reshape(-1, seq_out.size(-1)),
+                    targets_golden.reshape(-1)
+                )
+                
+                # Calculate CTC loss if needed
                 if self.ctc_weight > 0:
+                    # CTC loss expects (T, N, C), lengths for both sequences
                     ctc_loss = self.ctc_criterion(
                         ctc_inputs['log_probs'],
                         targets_golden,
@@ -152,7 +153,7 @@ class ASRTrainer(BaseTrainer):
             # Normalize loss by accumulation steps
             loss = loss / self.config['training']['gradient_accumulation_steps']
 
-            # TODO: Backpropagate the loss
+            # Backpropagate the loss
             self.scaler.scale(loss).backward()
 
             # Only update weights after accumulating enough gradients
@@ -178,11 +179,10 @@ class ASRTrainer(BaseTrainer):
             )
             batch_bar.update()
 
-            # FIX: Clean up all tensors including curr_att which was previously missing,
-            # and remove empty_cache() from the per-batch loop — it forces costly CUDA
-            # syncs on every batch. We call it once per epoch in train() instead.
+            # Clean up
             del feats, targets_shifted, targets_golden, feat_lengths, transcript_lengths
-            del seq_out, curr_att, ctc_inputs, ce_loss, ctc_loss, loss
+            del seq_out, curr_att, ctc_inputs, loss
+            torch.cuda.empty_cache()
 
         # Handle remaining gradients
         if (len(dataloader) % self.config['training']['gradient_accumulation_steps']) != 0:
@@ -208,47 +208,41 @@ class ASRTrainer(BaseTrainer):
             'perplexity_char': avg_perplexity_char.item()
         }, running_att
 
-    def _validate_epoch(self, dataloader):
+    def _validate_epoch(self, dataloader, recognition_config: Optional[Dict[str, Any]] = None):
         """
         Validate for one epoch.
         
         Args:
             dataloader: DataLoader for validation data
+            recognition_config: Optional dictionary containing recognition parameters for beam_width control
         Returns:
             Tuple[Dict[str, float], List[Dict[str, Any]]]: Validation metrics and recognition results
         """
-        # Skip validation entirely if run_validation is False
-        if not self.run_validation:
-            print(" Skipping validation (run_validation=False)")
-            return {'word_dist': 0.0, 'wer': 0.0, 'cer': 0.0}, []
-
-        # Greedy validation over limited batches for speed
-        recognition_config = {
-            'num_batches': 10,
-            'beam_width': 1,
-            'temperature': 1.0,
-            'repeat_penalty': 1.0,
-            'lm_weight': 0.0,
-            'lm_model': None
-        }
-        val_results = self.recognize(
-            dataloader,
-            recognition_config=recognition_config,
-            config_name='greedy',
-            max_length=getattr(self, 'text_max_len', None)
-        )
-
-        references = [r['target'] for r in val_results if 'target' in r]
-        hypotheses = [r['generated'] for r in val_results if 'target' in r]
-
-        if len(references) == 0:
-            return {'word_dist': 0.0, 'wer': 0.0, 'cer': 0.0}, val_results
-
-        metrics = self._calculate_asr_metrics(references, hypotheses)
+        # Use default greedy config if none provided
+        if recognition_config is None:
+            recognition_config = {
+                'num_batches': None,
+                'beam_width': 1,
+                'temperature': 1.0,
+                'repeat_penalty': 1.0,
+                'lm_weight': 0.0,
+                'lm_model': None
+            }
+        
+        # Generate transcriptions
+        val_results = self.recognize(dataloader, recognition_config, 'validation')
+        
+        # Extract references and hypotheses
+        references = [r['target'] for r in val_results]
+        hypotheses = [r['generated'] for r in val_results]
+        
+        # Calculate metrics
+        metrics = self._calculate_asr_metrics(hypotheses, references)
+        
         return metrics, val_results
         
     
-    def train(self, train_dataloader, val_dataloader, epochs: int):
+    def train(self, train_dataloader, val_dataloader, epochs: int, val_recognition_config: Optional[Dict[str, Any]] = None):
         """
         Full training loop for ASR training.
         
@@ -256,6 +250,7 @@ class ASRTrainer(BaseTrainer):
             train_dataloader: DataLoader for training data
             val_dataloader: DataLoader for validation data
             epochs: int, number of epochs to train
+            val_recognition_config: Optional dictionary containing recognition parameters for validation (e.g., beam_width)
         """
         if self.scheduler is None:
             raise ValueError("Scheduler is not initialized, initialize it first!")
@@ -274,21 +269,13 @@ class ASRTrainer(BaseTrainer):
 
         for epoch in range(self.current_epoch, self.current_epoch + epochs):
 
-            # TODO: Train for one epoch
+            # Train for one epoch
             train_metrics, train_attn = self._train_epoch(train_dataloader)
-
-            # FIX: Single empty_cache() call per epoch, between training and validation.
-            # This gives CUDA a clean slate before the validation forward passes
-            # without the per-batch sync overhead that was killing throughput.
-            torch.cuda.empty_cache()
             
-            # TODO: Validate
-            val_metrics, val_results = self._validate_epoch(val_dataloader)
+            # Validate with optional dynamic beam_width
+            val_metrics, val_results = self._validate_epoch(val_dataloader, val_recognition_config)
 
-            # FIX: Free validation memory before next epoch
-            torch.cuda.empty_cache()
-
-            # Step ReduceLROnPlateau scheduler with validation loss
+            # Step ReduceLROnPlateau scheduler with validation cer
             if isinstance(self.scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
                 self.scheduler.step(val_metrics['cer'])
             
@@ -300,7 +287,7 @@ class ASRTrainer(BaseTrainer):
             self._log_metrics(metrics, epoch)
 
             # Save attention plots
-            train_attn_keys = list(train_attn.keys()) if train_attn is not None else []
+            train_attn_keys = list(train_attn.keys())
             if train_attn_keys: 
                 # Get the first self-attention and cross-attention layers
                 decoder_self_keys  = [k for k in train_attn_keys if 'dec_self' in k]
@@ -383,6 +370,7 @@ class ASRTrainer(BaseTrainer):
                 - repeat_penalty: float, repeat penalty for beam search
                 - lm_weight: float, language model interpolation weight
                 - lm_model: Optional[DecoderOnlyTransformer], language model for shallow fusion
+            config_name: Optional[str], name of the configuration for logging
             max_length: Optional[int], maximum length of the generated sequence
         Returns:
             List of dictionaries containing recognition results with generated sequences and scores
@@ -390,18 +378,20 @@ class ASRTrainer(BaseTrainer):
         """
         if max_length is None and not hasattr(self, 'text_max_len'):
             raise ValueError("text_max_len is not set. Please run training loop first or provide a max_length")
-
+        
         if recognition_config is None:
             # Default config (greedy search)
             recognition_config = {
-                'num_batches': 5,
+                'num_batches': None,
                 'beam_width': 1,
                 'temperature': 1.0,
                 'repeat_penalty': 1.0,
                 'lm_weight': 0.0,
                 'lm_model': None
             }
-            config_name = 'greedy'
+        
+        if config_name is None:
+            config_name = f"beam_{recognition_config.get('beam_width', 1)}"
 
         if recognition_config.get('lm_model') is not None:
             recognition_config['lm_model'].eval()
@@ -423,15 +413,15 @@ class ASRTrainer(BaseTrainer):
         # Run inference
         with torch.inference_mode():
             for i, batch in enumerate(dataloader):
-                # TODO: Unpack batch and move to device
-                # TODO: Handle both cases where targets may or may not be None (val set v. test set) 
+                # Unpack batch and move to device
+                # Handle both cases where targets may or may not be None (val set v. test set)
                 feats, _, targets_golden, feat_lengths, _ = batch
                 feats = feats.to(self.device)
                 feat_lengths = feat_lengths.to(self.device)
                 if targets_golden is not None:
                     targets_golden = targets_golden.to(self.device)
                 
-                # TODO: Encode speech features to hidden states
+                # Encode speech features to hidden states
                 encoder_output, pad_mask_src, _, _ = self.model.encode(feats, feat_lengths)
                 
                 # Define scoring function for this batch
@@ -445,7 +435,7 @@ class ASRTrainer(BaseTrainer):
                 # Set score function of generator
                 generator.score_fn = get_score
 
-                # TODO: Initialize prompts as a batch of SOS tokens
+                # Initialize prompts as a batch of SOS tokens
                 batch_size = feats.size(0)
                 prompts = torch.full(
                     (batch_size, 1),
@@ -454,27 +444,20 @@ class ASRTrainer(BaseTrainer):
                     device=self.device
                 )
 
-                # TODO: Generate sequences
+                # Generate sequences
                 if recognition_config['beam_width'] > 1:
-                    # TODO: If you have implemented beam search, generate sequences using beam search
-                    try:
-                        seqs, scores = generator.generate_beam(
-                            prompts,
-                            beam_width=recognition_config['beam_width'],
-                            temperature=recognition_config['temperature'],
-                            repeat_penalty=recognition_config['repeat_penalty']
-                        )
-                        # Pick best beam
-                        seqs = seqs[:, 0, :]
-                        scores = scores[:, 0]
-                    except NotImplementedError:
-                        seqs, scores = generator.generate_greedy(
-                            prompts,
-                            temperature=recognition_config['temperature'],
-                            repeat_penalty=recognition_config['repeat_penalty']
-                        )
+                    # Generate sequences using beam search
+                    seqs, scores = generator.generate_beam(
+                        prompts,
+                        beam_width=recognition_config['beam_width'],
+                        temperature=recognition_config['temperature'],
+                        repeat_penalty=recognition_config['repeat_penalty']
+                    )
+                    # Pick best beam
+                    seqs = seqs[:, 0, :]
+                    scores = scores[:, 0]
                 else:
-                    # TODO: Generate sequences using greedy search
+                    # Generate sequences using greedy search
                     seqs, scores = generator.generate_greedy(
                         prompts,
                         temperature=recognition_config['temperature'],
@@ -483,6 +466,7 @@ class ASRTrainer(BaseTrainer):
 
                 # Clean up
                 del feats, feat_lengths, encoder_output, pad_mask_src, prompts
+                torch.cuda.empty_cache()
 
                 # Post process sequences
                 post_processed_preds = generator.post_process_sequence(seqs, self.tokenizer)
@@ -505,7 +489,7 @@ class ASRTrainer(BaseTrainer):
 
                 batch_bar.update()
 
-                if recognition_config['num_batches'] is not None and i >= recognition_config['num_batches'] - 1:
+                if recognition_config.get('num_batches') is not None and i >= recognition_config['num_batches'] - 1:
                     break
 
             batch_bar.close()
@@ -909,3 +893,6 @@ class ProgressiveTrainer(ASRTrainer):
         )
         
         return subset_loader
+        
+        
+        

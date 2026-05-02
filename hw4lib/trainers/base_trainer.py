@@ -80,8 +80,12 @@ class BaseTrainer(ABC):
             config_file: str,
             device: Optional[str] = None
     ):
-        self.device = self._resolve_device(device)
-        print(f"Using device: {self.device}")
+        # If device is not specified, determine it
+        if device is None:
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+        
+        print(f"Using device: {device}")
+        self.device = device
         self.model = model.to(self.device)
         self.tokenizer = tokenizer
         self.config = config
@@ -99,24 +103,6 @@ class BaseTrainer(ABC):
         self.current_epoch = 0
         self.best_metric = float('inf')
         self.training_history = []
-
-    def _resolve_device(self, device: Optional[str]) -> str:
-        """Return a device that can actually run a small CUDA forward pass."""
-        if device is None:
-            device = "cuda" if torch.cuda.is_available() else "cpu"
-
-        if device != "cuda":
-            return device
-
-        try:
-            probe_model = nn.Conv2d(1, 1, kernel_size=1).to("cuda")
-            probe_input = torch.randn(1, 1, 1, 1, device="cuda")
-            with torch.no_grad():
-                probe_model(probe_input)
-            return "cuda"
-        except Exception as exc:
-            print(f"CUDA probe failed, falling back to cpu: {exc}")
-            return "cpu"
     
     @abstractmethod
     def _train_epoch(self, dataloader) -> Tuple[Dict[str, float], Dict[str, torch.Tensor]]:
