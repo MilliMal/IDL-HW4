@@ -57,16 +57,18 @@ class ASRTrainer(BaseTrainer):
     def __init__(self, model, tokenizer, config, run_name, config_file, device=None):
         super().__init__(model, tokenizer, config, run_name, config_file, device)
 
-        # Initialize CE loss
-        # ignore_index is the pad token id so padded positions don't contribute to loss
-        # label_smoothing comes from the config to regularize the output distribution
+        # TODO: Implement the __init__ method
+        
+        # TODO: Initialize CE loss
+        # How would you set the ignore_index? 
+        # Use value in config to set the label_smoothing argument
         self.ce_criterion = nn.CrossEntropyLoss(
             ignore_index=self.tokenizer.pad_id,
             label_smoothing=self.config['loss'].get('label_smoothing', 0.0)
         )
         
-        # Initialize CTC loss if needed
-        # Use pad token id as blank index (CTC blank label)
+        # TODO: Initialize CTC loss if needed
+        # You can use the pad token id as the blank index
         self.ctc_criterion = None
         self.ctc_weight = self.config['loss'].get('ctc_weight', 0.0)
         if self.ctc_weight > 0:
@@ -98,57 +100,41 @@ class ASRTrainer(BaseTrainer):
         self.optimizer.zero_grad()
 
         for i, batch in enumerate(dataloader):
-            # Unpack batch and move to device
+            # TODO: Unpack batch and move to device
             feats, targets_shifted, targets_golden, feat_lengths, transcript_lengths = batch
-            feats             = feats.to(self.device)
-            targets_shifted   = targets_shifted.to(self.device)
-            targets_golden    = targets_golden.to(self.device)
-            feat_lengths      = feat_lengths.to(self.device)
+            feats = feats.to(self.device)
+            targets_shifted = targets_shifted.to(self.device)
+            targets_golden = targets_golden.to(self.device)
+            feat_lengths = feat_lengths.to(self.device)
             transcript_lengths = transcript_lengths.to(self.device)
 
-            with torch.autocast(device_type=self.device, dtype=torch.float16):
-                # Forward pass: get raw predictions, attention weights, and CTC encoder outputs
-                # Model returns (seq_out, attn_weights_dict, ctc_inputs)
-                # seq_out shape: (batch, tgt_seq_len, vocab_size)
-                # ctc_inputs shape: (batch, src_seq_len, vocab_size) — encoder projection for CTC
-                seq_out, curr_att, ctc_inputs = self.model(
-                    feats,
-                    targets_shifted,
-                    feat_lengths,
-                    transcript_lengths
-                )
+            autocast_dtype = torch.float16 if self.device == 'cuda' else torch.bfloat16
+
+            with torch.autocast(device_type=self.device, dtype=autocast_dtype):
+                # TODO: get raw predictions and attention weights and ctc inputs from model
+                seq_out, curr_att, ctc_inputs = self.model(feats, targets_shifted, feat_lengths, transcript_lengths)
                 
                 # Update running_att with the latest attention weights
                 running_att = curr_att
                 
-                # Calculate CE loss
-                # seq_out: (B, T, V) -> reshape to (B*T, V) for CrossEntropyLoss
-                # targets_golden: (B, T) -> reshape to (B*T,)
+                # TODO: Calculate CE loss
                 ce_loss = self.ce_criterion(
-                    seq_out.reshape(-1, seq_out.size(-1)),
-                    targets_golden.reshape(-1)
+                    seq_out.view(-1, seq_out.size(-1)),
+                    targets_golden.view(-1)
                 )
                 
-                # Calculate CTC loss if enabled
+                
+                # TODO: Calculate CTC loss if needed
                 if self.ctc_weight > 0:
-                    # ctc_inputs: (B, T_enc, V) -> (T_enc, B, V) for CTCLoss
-                    ctc_log_probs = F.log_softmax(ctc_inputs, dim=-1).permute(1, 0, 2)
-                    
-                    # Compute the downsampled encoder lengths to match ctc_inputs time dimension
-                    # The encoder may downsample the input via CNN strides; derive actual lengths
-                    enc_time = ctc_inputs.size(1)
-                    # Scale feat_lengths proportionally (handles CNN downsampling)
-                    ctc_input_lengths = (feat_lengths.float() * enc_time / feats.size(1)).long().clamp(max=enc_time)
-                    
                     ctc_loss = self.ctc_criterion(
-                        ctc_log_probs,          # (T_enc, B, V)
-                        targets_golden,          # (B, T_tgt)
-                        ctc_input_lengths,       # (B,)
-                        transcript_lengths       # (B,)
+                        ctc_inputs['log_probs'],
+                        targets_golden,
+                        ctc_inputs['lengths'],
+                        transcript_lengths
                     )
                     loss = ce_loss + self.ctc_weight * ctc_loss
                 else:
-                    ctc_loss = torch.tensor(0.0)
+                    ctc_loss = torch.tensor(0.0, device=self.device)
                     loss = ce_loss
 
             # Calculate metrics
@@ -162,7 +148,7 @@ class ASRTrainer(BaseTrainer):
             # Normalize loss by accumulation steps
             loss = loss / self.config['training']['gradient_accumulation_steps']
 
-            # Backpropagate using the scaler for mixed-precision
+            # TODO: Backpropagate the loss
             self.scaler.scale(loss).backward()
 
             # Only update weights after accumulating enough gradients
@@ -190,10 +176,10 @@ class ASRTrainer(BaseTrainer):
 
             # Clean up
             del feats, targets_shifted, targets_golden, feat_lengths, transcript_lengths
-            del seq_out, curr_att, ctc_inputs, loss
+            del seq_out, curr_att, ctc_inputs, ce_loss, ctc_loss, loss
             torch.cuda.empty_cache()
 
-        # Handle remaining gradients if dataloader length isn't divisible by accumulation steps
+        # Handle remaining gradients
         if (len(dataloader) % self.config['training']['gradient_accumulation_steps']) != 0:
             self.scaler.step(self.optimizer)
             if not isinstance(self.scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
@@ -226,31 +212,32 @@ class ASRTrainer(BaseTrainer):
         Returns:
             Tuple[Dict[str, float], List[Dict[str, Any]]]: Validation metrics and recognition results
         """
-        # Build a default recognition config for validation: greedy search over a few batches
-        val_recognition_config = {
-            'num_batches': self.config['training'].get('val_num_batches', 5),
+        # Greedy validation over full validation set
+        recognition_config = {
+            'num_batches': None,
             'beam_width': 1,
             'temperature': 1.0,
             'repeat_penalty': 1.0,
             'lm_weight': 0.0,
             'lm_model': None
         }
+        val_results = self.recognize(
+            dataloader,
+            recognition_config=recognition_config,
+            config_name='greedy',
+            max_length=getattr(self, 'text_max_len', None)
+        )
 
-        # Use recognize() to generate transcriptions on the validation set
-        val_results = self.recognize(dataloader, val_recognition_config, config_name='greedy_val')
+        references = [r['target'] for r in val_results if 'target' in r]
+        hypotheses = [r['generated'] for r in val_results if 'target' in r]
 
-        # Extract references and hypotheses from recognition results
-        # Results without a 'target' key come from the test set — skip metrics in that case
-        references = [r['target']    for r in val_results if 'target'    in r]
-        hypotheses = [r['generated'] for r in val_results if 'generated' in r]
+        if len(references) == 0:
+            return {'word_dist': 0.0, 'wer': 0.0, 'cer': 0.0}, val_results
 
-        if references and hypotheses:
-            asr_metrics = self._calculate_asr_metrics(references, hypotheses)
-        else:
-            asr_metrics = {'word_dist': 0.0, 'wer': 0.0, 'cer': 0.0}
-
-        return asr_metrics, val_results
-
+        metrics = self._calculate_asr_metrics(references, hypotheses)
+        return metrics, val_results
+        
+    
     def train(self, train_dataloader, val_dataloader, epochs: int):
         """
         Full training loop for ASR training.
@@ -265,12 +252,9 @@ class ASRTrainer(BaseTrainer):
         
         if self.optimizer is None:
             raise ValueError("Optimizer is not initialized, initialize it first!")
-
-        # Set max transcript length from both train and validation sets
-        self.text_max_len = max(
-            val_dataloader.dataset.text_max_len,
-            train_dataloader.dataset.text_max_len
-        )
+        
+        # Set max transcript length
+        self.text_max_len = max(val_dataloader.dataset.text_max_len, train_dataloader.dataset.text_max_len)
 
         # Training loop
         best_val_loss = float('inf')
@@ -280,17 +264,13 @@ class ASRTrainer(BaseTrainer):
 
         for epoch in range(self.current_epoch, self.current_epoch + epochs):
 
-            print(f"\n{'='*60}")
-            print(f"Epoch {epoch + 1} / {self.current_epoch + epochs}")
-            print(f"{'='*60}")
-
-            # Train for one epoch
+            # TODO: Train for one epoch
             train_metrics, train_attn = self._train_epoch(train_dataloader)
             
-            # Validate
+            # TODO: Validate
             val_metrics, val_results = self._validate_epoch(val_dataloader)
 
-            # Step ReduceLROnPlateau scheduler with validation CER
+            # Step ReduceLROnPlateau scheduler with validation loss
             if isinstance(self.scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
                 self.scheduler.step(val_metrics['cer'])
             
@@ -302,24 +282,23 @@ class ASRTrainer(BaseTrainer):
             self._log_metrics(metrics, epoch)
 
             # Save attention plots
-            if train_attn is not None:
-                train_attn_keys = list(train_attn.keys())
-                if train_attn_keys: 
-                    # Get the first self-attention and cross-attention layers
-                    decoder_self_keys  = [k for k in train_attn_keys if 'dec_self' in k]
-                    decoder_cross_keys = [k for k in train_attn_keys if 'dec_cross' in k]
-                    
-                    if decoder_self_keys:
-                        # Plot first layer (layer1) if available
-                        first_self_key = decoder_self_keys[0]
-                        if first_self_key in train_attn:
-                            self._save_attention_plot(train_attn[first_self_key][0], epoch, "decoder_self")
-                    
-                    if decoder_cross_keys:
-                        # Plot last layer if available
-                        last_cross_key = decoder_cross_keys[-1]
-                        if last_cross_key in train_attn:
-                            self._save_attention_plot(train_attn[last_cross_key][0], epoch, "decoder_cross")
+            train_attn_keys = list(train_attn.keys()) if train_attn is not None else []
+            if train_attn_keys: 
+                # Get the first self-attention and cross-attention layers
+                decoder_self_keys  = [k for k in train_attn_keys if 'dec_self' in k]
+                decoder_cross_keys = [k for k in train_attn_keys if 'dec_cross' in k]
+                
+                if decoder_self_keys:
+                    # Plot first layer (layer1) if available
+                    first_self_key = decoder_self_keys[0]
+                    if first_self_key in train_attn:
+                        self._save_attention_plot(train_attn[first_self_key][0], epoch, "decoder_self")
+                
+                if decoder_cross_keys:
+                    # Plot last layer if available
+                    last_cross_key = decoder_cross_keys[-1]
+                    if last_cross_key in train_attn:
+                        self._save_attention_plot(train_attn[last_cross_key][0], epoch, "decoder_cross")
             
             # Save generated text
             self._save_generated_text(val_results, f'val_epoch_{epoch}')
@@ -327,7 +306,7 @@ class ASRTrainer(BaseTrainer):
             # Save checkpoints
             self.save_checkpoint('checkpoint-last-epoch-model.pth')
             
-            # Check if this is the best model (tracked by CER)
+            # Check if this is the best model
             if val_metrics['cer'] < best_val_cer:
                 best_val_cer = val_metrics['cer']
                 self.best_metric = val_metrics['cer']
@@ -426,21 +405,18 @@ class ASRTrainer(BaseTrainer):
         # Run inference
         with torch.inference_mode():
             for i, batch in enumerate(dataloader):
-                # Unpack batch and move to device
-                # The collate_fn returns (feats, targets_shifted, targets_golden, feat_lengths, transcript_lengths)
-                # For the test set, targets_shifted and targets_golden may be None
+                # TODO: Unpack batch and move to device
+                # TODO: Handle both cases where targets may or may not be None (val set v. test set) 
                 feats, _, targets_golden, feat_lengths, _ = batch
-                feats        = feats.to(self.device)
+                feats = feats.to(self.device)
                 feat_lengths = feat_lengths.to(self.device)
                 if targets_golden is not None:
                     targets_golden = targets_golden.to(self.device)
                 
-                # Encode speech features to hidden states using the encoder portion of the model
-                # encode() returns (encoder_output, pad_mask_src, enc_attn, reduced_feat_lengths)
+                # TODO: Encode speech features to hidden states
                 encoder_output, pad_mask_src, _, _ = self.model.encode(feats, feat_lengths)
                 
                 # Define scoring function for this batch
-                # This closure captures encoder_output and pad_mask_src for cross-attention
                 def get_score(x):
                     asr_logits = self.model.score(x, encoder_output, pad_mask_src)
                     if recognition_config.get('lm_model') is not None:
@@ -451,40 +427,47 @@ class ASRTrainer(BaseTrainer):
                 # Set score function of generator
                 generator.score_fn = get_score
 
-                # Initialize prompts as a batch of SOS tokens: shape (batch_size, 1)
+                # TODO: Initialize prompts as a batch of SOS tokens
                 batch_size = feats.size(0)
                 prompts = torch.full(
                     (batch_size, 1),
-                    fill_value=self.tokenizer.sos_id,
+                    self.tokenizer.sos_id,
                     dtype=torch.long,
                     device=self.device
                 )
 
-                # Generate sequences using beam search or greedy decoding
+                # TODO: Generate sequences
                 if recognition_config['beam_width'] > 1:
-                    # Generate sequences using beam search
-                    seqs, scores = generator.generate_beam(
-                        prompts,
-                        beam_width=recognition_config['beam_width'],
-                        temperature=recognition_config.get('temperature', 1.0),
-                        repeat_penalty=recognition_config.get('repeat_penalty', 1.0)
-                    )
-                    # Pick best beam (index 0 is the highest-scoring beam after sorting)
-                    seqs   = seqs[:, 0, :]
-                    scores = scores[:, 0]
+                    # TODO: If you have implemented beam search, generate sequences using beam search
+                    try:
+                        seqs, scores = generator.generate_beam(
+                            prompts,
+                            beam_width=recognition_config['beam_width'],
+                            temperature=recognition_config['temperature'],
+                            repeat_penalty=recognition_config['repeat_penalty']
+                        )
+                        # Pick best beam
+                        seqs = seqs[:, 0, :]
+                        scores = scores[:, 0]
+                    except NotImplementedError:
+                        seqs, scores = generator.generate_greedy(
+                            prompts,
+                            temperature=recognition_config['temperature'],
+                            repeat_penalty=recognition_config['repeat_penalty']
+                        )
                 else:
-                    # Generate sequences using greedy search
+                    # TODO: Generate sequences using greedy search
                     seqs, scores = generator.generate_greedy(
                         prompts,
-                        temperature=recognition_config.get('temperature', 1.0),
-                        repeat_penalty=recognition_config.get('repeat_penalty', 1.0)
+                        temperature=recognition_config['temperature'],
+                        repeat_penalty=recognition_config['repeat_penalty']
                     )
 
-                # Clean up encoder outputs to free GPU memory
+                # Clean up
                 del feats, feat_lengths, encoder_output, pad_mask_src, prompts
                 torch.cuda.empty_cache()
 
-                # Post process sequences (trim padding, EOS, etc.)
+                # Post process sequences
                 post_processed_preds = generator.post_process_sequence(seqs, self.tokenizer)
                 
                 # Store results as a list of dictionaries with target and generated sequences and scores
@@ -513,7 +496,7 @@ class ASRTrainer(BaseTrainer):
 
     def _get_evaluation_recognition_configs(self, lm_model: Optional[DecoderOnlyTransformer] = None, lm_weight: float = 0.0) -> Dict[str, Dict[str, Any]]:
         """
-        Get a list of recognition configurations for sequential evaluation.
+        Get a list of recognition configurations for seqential evaluation.
         
         Returns:
             Dictionary containing recognition configurations
@@ -909,3 +892,6 @@ class ProgressiveTrainer(ASRTrainer):
         )
         
         return subset_loader
+        
+        
+        
