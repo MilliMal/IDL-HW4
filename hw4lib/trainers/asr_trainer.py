@@ -109,17 +109,16 @@ class ASRTrainer(BaseTrainer):
             feat_lengths = feat_lengths.to(self.device)
             transcript_lengths = transcript_lengths.to(self.device)
 
-            with torch.autocast(device_type=self.device, dtype=torch.float16):
-                # Get raw predictions and attention weights and ctc inputs from model
-                seq_out, curr_att, ctc_inputs = self.model(
-                    feats, 
-                    targets_shifted, 
-                    source_lengths=feat_lengths,
-                    target_lengths=transcript_lengths
-                )
+            autocast_dtype = torch.float16 if self.device == 'cuda' else torch.bfloat16
+
+            with torch.autocast(device_type=self.device, dtype=autocast_dtype):
+                # TODO: get raw predictions and attention weights and ctc inputs from model
+                seq_out, curr_att, ctc_inputs = self.model(feats, targets_shifted, feat_lengths, transcript_lengths)
                 
-                # Update running_att with the latest attention weights
-                running_att = curr_att
+                # FIX: detach attention weights to break computation graph reference
+                # Without this, PyTorch holds the entire computation graph for every
+                # batch in memory, causing OOM on large datasets
+                running_att = {k: v.detach() for k, v in curr_att.items()}
                 
                 # Calculate CE loss
                 # Reshape for loss calculation: (batch_size, tgt_len, num_classes) -> (batch_size * tgt_len, num_classes)
@@ -127,6 +126,7 @@ class ASRTrainer(BaseTrainer):
                     seq_out.reshape(-1, seq_out.size(-1)),
                     targets_golden.reshape(-1)
                 )
+                
                 
                 # Calculate CTC loss if needed
                 if self.ctc_weight > 0:
@@ -179,6 +179,7 @@ class ASRTrainer(BaseTrainer):
             )
             batch_bar.update()
 
+            # Clean up
             # Clean up
             del feats, targets_shifted, targets_golden, feat_lengths, transcript_lengths
             del seq_out, curr_att, ctc_inputs, loss
