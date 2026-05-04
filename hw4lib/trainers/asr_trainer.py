@@ -73,7 +73,7 @@ class ASRTrainer(BaseTrainer):
         self.ctc_weight = self.config['loss'].get('ctc_weight', 0.0)
         if self.ctc_weight > 0:
             self.ctc_criterion = nn.CTCLoss(
-                blank=self.tokenizer.pad_id,
+                blank=self.tokenizer.blank_id,
                 zero_infinity=True
             )
         
@@ -238,7 +238,7 @@ class ASRTrainer(BaseTrainer):
         hypotheses = [r['generated'] for r in val_results]
         
         # Calculate metrics
-        metrics = self._calculate_asr_metrics(hypotheses, references)
+        metrics = self._calculate_asr_metrics(references, hypotheses)
         
         return metrics, val_results
         
